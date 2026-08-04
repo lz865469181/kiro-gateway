@@ -19,6 +19,15 @@ __pycache__/
 dist/
 build/
 
+# Go
+/kiro-gateway
+/kiro-gateway.exe
+*.test
+coverage.out
+
+# Claude Code worktrees
+.claude/
+
 # Debug logs (generated when DEBUG_MODE is enabled)
 debug_logs*/
 debug*.json

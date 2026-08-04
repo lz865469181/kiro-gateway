@@ -15,7 +15,7 @@ services:
       
       # Required: Set your proxy API key
       # You can also use .env file (see env_file below)
-      - PROXY_API_KEY=${PROXY_API_KEY:-my-super-secret-password-123}
+      - PROXY_API_KEY=${PROXY_API_KEY:?Set a unique non-placeholder PROXY_API_KEY}
       
       # Authentication (choose one method)
       # Option 1: Refresh token
@@ -29,8 +29,11 @@ services:
       
       # Option 4: kiro-cli SQLite database (mounted as volume below)
       - KIRO_CLI_DB_FILE=${KIRO_CLI_DB_FILE:-}
-      
-      # Optional settings
+
+      # Writable account configuration and runtime state
+      - ACCOUNTS_CONFIG_FILE=/data/credentials.json
+      - ACCOUNTS_STATE_FILE=/data/state.json
+      - DEBUG_DIR=/data/debug_logs
       - KIRO_REGION=${KIRO_REGION:-us-east-1}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG_MODE=${DEBUG_MODE:-off}
@@ -51,14 +54,14 @@ services:
       # Uncomment and adjust path as needed:
       # - ~/.local/share/kiro-cli:/home/kiro/.local/share/kiro-cli  # Linux/macOS
       
-      # Mount debug logs directory (optional, for debugging)
-      - ./debug_logs:/app/debug_logs
+      # Persist generated credentials, account state, and debug logs
+      - kiro-data:/data
     
     restart: unless-stopped
     
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5)"]
+      test: ["CMD", "/app/kiro-gateway", "healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -78,3 +81,6 @@ services:
 networks:
   default:
     name: kiro-gateway-network
+
+volumes:
+  kiro-data:
