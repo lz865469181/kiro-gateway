@@ -293,6 +293,10 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	dbg := s.debugger()
 	dbg.Prepare()
 	dbg.Request(body)
+	if av := r.Header.Get("anthropic-version"); av != "" {
+		s.log.Debug("anthropic-version", "version", av)
+		dbg.AppLog(fmt.Sprintf("anthropic-version: %s", av))
+	}
 	if err != nil {
 		dbg.FlushError(422, err.Error())
 		s.validation(w, "anthropic", body, err)

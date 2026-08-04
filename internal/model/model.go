@@ -138,6 +138,31 @@ func (r *Resolver) Resolve(name string) Resolution {
 	}
 	return Resolution{normalized, "passthrough", name, normalized, false}
 }
+
+var familyRE = regexp.MustCompile(`(?i)(haiku|sonnet|opus)`)
+
+func ExtractFamily(name string) string {
+	if m := familyRE.FindStringSubmatch(name); m != nil {
+		return strings.ToLower(m[1])
+	}
+	return ""
+}
+
+func (r *Resolver) Suggestions(modelName string) []string {
+	family := ExtractFamily(modelName)
+	if family == "" {
+		return r.Available()
+	}
+	all := r.Available()
+	filtered := make([]string, 0, len(all))
+	for _, m := range all {
+		if strings.Contains(strings.ToLower(m), family) {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
 func (r *Resolver) Available() []string {
 	set := map[string]struct{}{}
 	for _, id := range r.Cache.IDs() {
