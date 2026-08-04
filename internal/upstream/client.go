@@ -366,6 +366,7 @@ func (c *Client) Do(ctx context.Context, method, url string, payload any, stream
 		req.Header = runtimeHeaders(c.auth, token)
 		if stream {
 			req.Header.Set("Accept", "application/vnd.amazon.eventstream")
+			req.Header.Set("Connection", "close")
 		}
 		res, err := c.client.Do(req)
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -24,6 +25,7 @@ type Logger struct {
 	Mode                         Mode
 	Dir                          string
 	request, kiro, raw, modified []byte
+	appLog                       strings.Builder
 }
 
 func (l *Logger) Prepare() {
@@ -33,6 +35,7 @@ func (l *Logger) Prepare() {
 	l.kiro = nil
 	l.raw = nil
 	l.modified = nil
+	l.appLog.Reset()
 	if l.Mode == All {
 		_ = os.RemoveAll(l.Dir)
 		_ = os.MkdirAll(l.Dir, 0755)
@@ -42,6 +45,12 @@ func (l *Logger) Request(data []byte)     { l.store("request_body.json", data, &
 func (l *Logger) KiroRequest(data []byte) { l.store("kiro_request_body.json", data, &l.kiro, false) }
 func (l *Logger) Raw(data []byte)         { l.store("raw_response.bin", data, &l.raw, true) }
 func (l *Logger) Modified(data []byte)    { l.store("modified_response.txt", data, &l.modified, true) }
+func (l *Logger) AppLog(msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.appLog.WriteString(msg)
+	l.appLog.WriteByte('\n')
+}
 func (l *Logger) store(name string, data []byte, buffer *[]byte, appendFile bool) {
 	if l.Mode == Off {
 		return
@@ -82,4 +91,7 @@ func (l *Logger) FlushError(status int, message string) {
 	}
 	data, _ := json.MarshalIndent(map[string]any{"status_code": status, "error_message": message}, "", "  ")
 	write("error_info.json", data)
+	if appLog := strings.TrimSpace(l.appLog.String()); appLog != "" {
+		write("app_logs.txt", []byte(appLog))
+	}
 }

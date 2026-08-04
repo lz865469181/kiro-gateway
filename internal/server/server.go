@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,7 +254,11 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
+	dbg := s.debugger()
+	dbg.Prepare()
+	dbg.Request(body)
 	if err != nil {
+		dbg.FlushError(422, err.Error())
 		s.validation(w, "openai", body, err)
 		return
 	}
@@ -264,10 +267,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = errors.New("model and messages are required")
 		}
+		dbg.FlushError(422, err.Error())
 		s.validation(w, "openai", body, err)
 		return
 	}
 	if req.ReasoningEffort != "" && !contains([]string{"none", "minimal", "low", "medium", "high", "xhigh"}, req.ReasoningEffort) {
+		dbg.FlushError(422, "invalid reasoning_effort")
 		s.validation(w, "openai", body, errors.New("reasoning_effort must be one of none, minimal, low, medium, high, xhigh"))
 		return
 	}
@@ -285,7 +290,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
+	dbg := s.debugger()
+	dbg.Prepare()
+	dbg.Request(body)
 	if err != nil {
+		dbg.FlushError(422, err.Error())
 		s.validation(w, "anthropic", body, err)
 		return
 	}
@@ -297,10 +306,12 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = errors.New("model, messages, and max_tokens are required")
 		}
+		dbg.FlushError(422, err.Error())
 		s.validation(w, "anthropic", body, err)
 		return
 	}
 	if err = validateAnthropicRequest(req.Messages, req.Tools, req.Temperature, req.TopP, req.TopK); err != nil {
+		dbg.FlushError(422, err.Error())
 		s.validation(w, "anthropic", body, err)
 		return
 	}
@@ -425,10 +436,11 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request, requested strin
 			search := s.webSearchFunc(a)
 			if isStream {
 				var streamErr error
+				modW := &debugResponseWriter{ResponseWriter: w, dbg: dbg}
 				if format == "openai" {
-					streamErr = stream.OpenAI(r.Context(), w, io.TeeReader(body, debugWriter{dbg}), s.cfg.FirstTokenTimeout, stream.OpenAIOptions{Model: requested, PromptTokens: prompt, ModelCache: a.Cache, ReasoningMode: s.cfg.FakeReasoningHandling, InitialBufferSize: s.cfg.FakeReasoningInitialBufferSize, IdleTimeout: s.cfg.StreamingReadTimeout, WebSearch: search})
+					streamErr = stream.OpenAI(r.Context(), modW, io.TeeReader(body, debugWriter{dbg}), s.cfg.FirstTokenTimeout, stream.OpenAIOptions{Model: requested, PromptTokens: prompt, ModelCache: a.Cache, ReasoningMode: s.cfg.FakeReasoningHandling, InitialBufferSize: s.cfg.FakeReasoningInitialBufferSize, IdleTimeout: s.cfg.StreamingReadTimeout, WebSearch: search})
 				} else {
-					streamErr = stream.Anthropic(r.Context(), w, io.TeeReader(body, debugWriter{dbg}), s.cfg.FirstTokenTimeout, stream.AnthropicOptions{Model: requested, InputTokens: prompt, ModelCache: a.Cache, ReasoningMode: s.cfg.FakeReasoningHandling, InitialBufferSize: s.cfg.FakeReasoningInitialBufferSize, IdleTimeout: s.cfg.StreamingReadTimeout, WebSearch: search})
+					streamErr = stream.Anthropic(r.Context(), modW, io.TeeReader(body, debugWriter{dbg}), s.cfg.FirstTokenTimeout, stream.AnthropicOptions{Model: requested, InputTokens: prompt, ModelCache: a.Cache, ReasoningMode: s.cfg.FakeReasoningHandling, InitialBufferSize: s.cfg.FakeReasoningInitialBufferSize, IdleTimeout: s.cfg.StreamingReadTimeout, WebSearch: search})
 				}
 				_ = res.Body.Close()
 				if streamErr != nil {
@@ -541,7 +553,9 @@ func (s *Server) nativeWebSearch(w http.ResponseWriter, r *http.Request, req *co
 		}
 		excluded[a.ID] = struct{}{}
 		client := &mcp.Client{Auth: a.Auth, HTTP: s.client}
-		result, err = client.WebSearch(r.Context(), query)
+		mcpCtx, mcpCancel := context.WithTimeout(r.Context(), 60*time.Second)
+		result, err = client.WebSearch(mcpCtx, query)
+		mcpCancel()
 		if httpErr := new(mcp.HTTPError); errors.As(err, &httpErr) && httpErr.Status == http.StatusForbidden {
 			if _, refreshErr := a.Auth.ForceRefresh(r.Context()); refreshErr == nil {
 				result, err = client.WebSearch(r.Context(), query)
@@ -609,6 +623,22 @@ func (s *Server) debugger() *debuglog.Logger {
 type debugWriter struct{ logger *debuglog.Logger }
 
 func (d debugWriter) Write(p []byte) (int, error) { d.logger.Raw(p); return len(p), nil }
+
+type debugResponseWriter struct {
+	http.ResponseWriter
+	dbg *debuglog.Logger
+}
+
+func (w *debugResponseWriter) Write(p []byte) (int, error) {
+	w.dbg.Modified(p)
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *debugResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 func convertOptions(c config.Config) convert.Options {
 	return convert.Options{ToolDescriptionMaxLength: c.ToolDescriptionMaxLength, FakeReasoningEnabled: c.FakeReasoningEnabled, FakeReasoningMaxTokens: c.FakeReasoningMaxTokens, FakeReasoningBudgetCap: c.FakeReasoningBudgetCap, TruncationRecovery: c.TruncationRecovery, MaxPayloadBytes: c.MaxPayloadBytes, AutoTrimPayload: c.AutoTrimPayload, HiddenModels: c.HiddenModels}
 }
@@ -696,7 +726,9 @@ func conversationID() string {
 	if _, err := rand.Read(b); err != nil {
 		return fmt.Sprint(time.Now().UnixNano())
 	}
-	return hex.EncodeToString(b)
+	b[6] = (b[6] & 0x0f) | 0x40 // UUID version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // UUID variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 func injectOpenAIRecovery(req *convert.ChatCompletionRequest) {
 	out := make([]convert.ChatMessage, 0, len(req.Messages)+1)
